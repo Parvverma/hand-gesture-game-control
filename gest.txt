@@ -1,0 +1,102 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+import time
+
+# --------- Setup ---------
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1)
+mp_draw = mp.solutions.drawing_utils
+
+cap = cv2.VideoCapture(0)
+
+# Get frame size
+frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+# --------- Video Writer Setup ---------
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # codec
+fps = cap.get(cv2.CAP_PROP_FPS)
+
+# Fallback if camera doesn't report FPS
+if fps == 0 or fps is None:
+    fps = 30.0
+
+print("Recording FPS:", fps)
+
+out = cv2.VideoWriter("gesture_recording.mp4", fourcc, fps, (frame_width, frame_height))
+
+
+prev_x, prev_y = None, None
+last_action_time = 0
+cooldown = 0.4  # seconds between key presses
+
+# --------- Loop ---------
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Camera not working")
+        break
+
+    frame = cv2.flip(frame, 1)
+    h, w, _ = frame.shape
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = hands.process(rgb)
+
+    action_text = "No hand"
+
+    if result.multi_hand_landmarks:
+        for handLms in result.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, handLms, mp_hands.HAND_CONNECTIONS)
+
+            # Wrist landmark (id = 0)
+            lm = handLms.landmark[0]
+            cx, cy = int(lm.x * w), int(lm.y * h)
+
+            cv2.circle(frame, (cx, cy), 10, (0, 255, 0), -1)
+
+            if prev_x is not None and prev_y is not None:
+                dx = cx - prev_x
+                dy = cy - prev_y
+
+                now = time.time()
+
+                if now - last_action_time > cooldown:
+                    if dx > 40:
+                        pyautogui.press("right")
+                        action_text = "RIGHT"
+                        last_action_time = now
+                    elif dx < -40:
+                        pyautogui.press("left")
+                        action_text = "LEFT"
+                        last_action_time = now
+                    elif dy < -40:
+                        pyautogui.press("up")
+                        action_text = "UP (JUMP)"
+                        last_action_time = now
+                    elif dy > 40:
+                        pyautogui.press("down")
+                        action_text = "DOWN (SLIDE)"
+                        last_action_time = now
+
+            prev_x, prev_y = cx, cy
+
+    cv2.putText(frame, f"Action: {action_text}", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+    # Show window
+    cv2.imshow("Gesture Control", frame)
+
+    # --------- Save frame to video ---------
+    out.write(frame)
+
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC to exit
+        break
+
+# --------- Cleanup ---------
+cap.release()
+out.release()
+cv2.destroyAllWindows()
+
+print("Video saved as gesture_recording.mp4")
