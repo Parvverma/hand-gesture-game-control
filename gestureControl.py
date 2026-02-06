@@ -2,35 +2,57 @@ import cv2
 import mediapipe as mp
 import pyautogui
 import time
+import math
 
+# --------- Setup ---------
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(max_num_hands=1)
 mp_draw = mp.solutions.drawing_utils
 
 cap = cv2.VideoCapture(0)
 
+# Get frame size
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-fourcc = cv2.VideoWriter_fourcc(*"mp4v") 
+# --------- Video Writer Setup ---------
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 fps = cap.get(cv2.CAP_PROP_FPS)
-
 if fps == 0 or fps is None:
     fps = 30.0
-
 print("Recording FPS:", fps)
 
 out = cv2.VideoWriter("gesture_recording.mp4", fourcc, fps, (frame_width, frame_height))
 
-
+# --------- Timing ---------
 prev_x, prev_y = None, None
 last_action_time = 0
-cooldown = 0.4 
+cooldown = 0.4  # seconds between movement key presses
 
 last_fist_time = 0
-fist_cooldown = 2.0  
+fist_cooldown = 2.0  # seconds between hoverboard activations
 
+# --------- Helper: count open fingers ---------
+# Landmark indices:
+# Thumb tip: 4, Index tip: 8, Middle: 12, Ring: 16, Pinky: 20
+# Bases: Index base: 5, Middle: 9, Ring: 13, Pinky: 17
+def count_fingers(handLms):
+    fingers = 0
 
+    # For simplicity, ignore thumb (it’s trickier with orientation)
+    tips = [8, 12, 16, 20]
+    bases = [5, 9, 13, 17]
+
+    for tip_id, base_id in zip(tips, bases):
+        tip = handLms.landmark[tip_id]
+        base = handLms.landmark[base_id]
+        # If tip is above base in image, finger is open
+        if tip.y < base.y:
+            fingers += 1
+
+    return fingers
+
+# --------- Loop ---------
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -49,33 +71,29 @@ while True:
         for handLms in result.multi_hand_landmarks:
             mp_draw.draw_landmarks(frame, handLms, mp_hands.HAND_CONNECTIONS)
 
-            lm = handLms.landmark[0]
-            cx, cy = int(lm.x * w), int(lm.y * h)
-
-            cv2.circle(frame, (cx, cy), 10, (0, 255, 0), -1)
-
             now = time.time()
 
-            tips_ids = [8, 12, 16, 20]
-            base_ids = [5, 9, 13, 17]
+            # --------- Get wrist for movement ---------
+            wrist = handLms.landmark[0]
+            cx, cy = int(wrist.x * w), int(wrist.y * h)
+            cv2.circle(frame, (cx, cy), 10, (0, 255, 0), -1)
 
-            fingers_folded = 0
-            for tip_id, base_id in zip(tips_ids, base_ids):
-                tip = handLms.landmark[tip_id]
-                base = handLms.landmark[base_id]
-                if tip.y > base.y:
-                    fingers_folded += 1
+            # --------- Count fingers ---------
+            fingers_open = count_fingers(handLms)
+            cv2.putText(frame, f"Fingers: {fingers_open}", (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
 
-            if fingers_folded >= 4 and (now - last_fist_time) > fist_cooldown:
-                print("FIST DETECTED -> HOVERBOARD!")
+            # --------- Fist = Hoverboard (0 fingers) ---------
+            if fingers_open == 0 and (now - last_fist_time) > fist_cooldown:
+                print("FIST (0 fingers) -> HOVERBOARD!")
                 action_text = "HOVERBOARD!"
 
-                pyautogui.press("up")
-                time.sleep(0.05)
-                pyautogui.press("up")
+                # Double tap UP arrow
+                pyautogui.press("space")
 
                 last_fist_time = now
 
+            # --------- Movement Control (only if not just triggered) ---------
             if prev_x is not None and prev_y is not None:
                 dx = cx - prev_x
                 dy = cy - prev_y
@@ -103,13 +121,16 @@ while True:
     cv2.putText(frame, f"Action: {action_text}", (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
+    # Show window
     cv2.imshow("Gesture Control", frame)
 
+    # Save frame to video
     out.write(frame)
 
-    if cv2.waitKey(1) & 0xFF == 27: 
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC to exit
         break
 
+# --------- Cleanup ---------
 cap.release()
 out.release()
 cv2.destroyAllWindows()
